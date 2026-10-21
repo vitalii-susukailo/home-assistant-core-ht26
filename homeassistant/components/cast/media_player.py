@@ -48,6 +48,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -56,8 +57,10 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.logging import async_create_catching_coro
 
 from .const import (
+    CONF_DEVICE_PROFILES,
     CONF_IGNORE_CEC,
     DOMAIN,
+    ISSUE_PROFILE_MISMATCH,
     SIGNAL_CAST_DISCOVERED,
     SIGNAL_CAST_REMOVED,
     SIGNAL_HASS_CAST_SHOW_VIEW,
@@ -65,11 +68,17 @@ from .const import (
 )
 from .discovery import setup_internal_discovery
 from .helpers import (
+    PROFILE_HOST_CHANGED,
+    PROFILE_INCOMPLETE,
+    PROFILE_MATCH,
+    PROFILE_MISMATCH,
     CastStatusListener,
     ChromecastInfo,
     ChromeCastZeroconf,
     PlaylistError,
     PlaylistSupported,
+    build_device_profile,
+    compare_device_profile,
     parse_playlist,
 )
 
@@ -279,8 +288,67 @@ class CastDevice:
             # Discovered is not our device.
             return
 
+        if not self._async_profile_accepted(discover):
+            return
+
         _LOGGER.debug("Discovered chromecast with same UUID: %s", discover)
         self._cast_info = discover
+
+    @callback
+    def _async_profile_accepted(self, discover: ChromecastInfo) -> bool:
+        """Check an announcement against the profile recorded for this UUID.
+
+        Matching a UUID is not enough to accept new connection details: mDNS is
+        unauthenticated, so anything on the network can claim a UUID it has
+        seen. Returns True when the announcement may update this entity.
+        """
+        uuid = str(self._cast_info.uuid)
+        profiles = self._config_entry.data.get(CONF_DEVICE_PROFILES, {})
+        current = build_device_profile(discover.cast_info)
+        verdict = compare_device_profile(profiles.get(uuid), current)
+
+        if verdict == PROFILE_MISMATCH:
+            _LOGGER.warning(
+                "Refusing update for %s: a device claiming this UUID announced"
+                " itself from a new host with different attributes"
+                " (stored %s, announced %s)",
+                self._cast_info.friendly_name,
+                profiles[uuid],
+                current,
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                f"{ISSUE_PROFILE_MISMATCH}_{uuid}",
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_PROFILE_MISMATCH,
+                translation_placeholders={
+                    "name": str(self._cast_info.friendly_name),
+                    "stored_host": str(profiles[uuid].get("host")),
+                    "new_host": str(current.get("host")),
+                },
+            )
+            return False
+
+        if verdict == PROFILE_HOST_CHANGED:
+            _LOGGER.info(
+                "%s moved from %s to %s; attributes unchanged, accepting",
+                self._cast_info.friendly_name,
+                profiles[uuid].get("host"),
+                current.get("host"),
+            )
+
+        if verdict not in (PROFILE_MATCH, PROFILE_INCOMPLETE):
+            # First sight, or an accepted change: remember what we saw.
+            self.hass.config_entries.async_update_entry(
+                self._config_entry,
+                data={
+                    **self._config_entry.data,
+                    CONF_DEVICE_PROFILES: {**profiles, uuid: current},
+                },
+            )
+        return True
 
     async def _async_cast_removed(self, discover: ChromecastInfo) -> None:
         """Handle removal of Chromecast."""
