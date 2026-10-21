@@ -23,6 +23,12 @@
       "message": "App {app_name} is not supported"
     }
   },
+  "issues": {
+    "device_profile_mismatch": {
+      "title": "Unexpected change for Cast device {name}",
+      "description": "A device claiming to be {name} announced itself from a new address ({new_host} instead of {stored_host}) and also reported different hardware details. Home Assistant kept the existing device and ignored the announcement.\n\nIf you replaced or reset this device, remove it and add it again. If you did not, another device on your network is claiming its identity."
+    }
+  },
   "options": {
     "step": {
       "init": {

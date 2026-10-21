@@ -31,6 +31,67 @@ _LOGGER = logging.getLogger(__name__)
 _PLS_SECTION_PLAYLIST = "playlist"
 
 
+# Outcomes of comparing a device announcement against its recorded profile.
+PROFILE_FIRST_SIGHT = "first_sight"
+PROFILE_MATCH = "match"
+PROFILE_HOST_CHANGED = "host_changed"
+PROFILE_ATTRS_CHANGED = "attributes_changed"
+PROFILE_MISMATCH = "mismatch"
+PROFILE_INCOMPLETE = "incomplete"
+
+# Attributes recorded for a device, besides its host.
+_PROFILE_ATTRS = ("model_name", "manufacturer", "cast_type")
+
+
+def build_device_profile(cast_info: CastInfo) -> dict[str, str | None]:
+    """Return the identifying profile for a device.
+
+    Every value is already present on the announcement, so recording a profile
+    costs no extra network round trip.
+    """
+    return {
+        "model_name": cast_info.model_name,
+        "manufacturer": cast_info.manufacturer,
+        "cast_type": cast_info.cast_type,
+        "host": cast_info.host,
+    }
+
+
+def compare_device_profile(
+    stored: dict[str, str | None] | None, current: dict[str, str | None]
+) -> str:
+    """Compare an announcement against the profile recorded for that UUID.
+
+    A device cannot prove its identity to us: the only identifier it returns is
+    the UUID being claimed, fetched from the device itself over an unverified
+    channel. So the host is treated as a trigger and the attributes as the
+    judgement, and only a device that changed both is refused - a host change
+    alone is the ordinary result of a new DHCP lease.
+    """
+    if not stored:
+        return PROFILE_FIRST_SIGHT
+
+    if any(
+        current.get(attr) is None and stored.get(attr) is not None
+        for attr in _PROFILE_ATTRS
+    ):
+        # The device did not answer, so attributes are missing rather than
+        # different. Accept the announcement but keep the recorded profile -
+        # overwriting it with nulls would disarm the check permanently.
+        return PROFILE_INCOMPLETE
+
+    host_changed = stored.get("host") != current.get("host")
+    attrs_changed = any(stored.get(a) != current.get(a) for a in _PROFILE_ATTRS)
+
+    if host_changed and attrs_changed:
+        return PROFILE_MISMATCH
+    if attrs_changed:
+        return PROFILE_ATTRS_CHANGED
+    if host_changed:
+        return PROFILE_HOST_CHANGED
+    return PROFILE_MATCH
+
+
 @attr.s(slots=True, frozen=True)
 class ChromecastInfo:
     """Class to hold all data about a chromecast for creating connections.

@@ -29,6 +29,13 @@ SIGNAL_HASS_CAST_SHOW_VIEW: SignalType[
 CONF_IGNORE_CEC = "ignore_cec"
 CONF_KNOWN_HOSTS = "known_hosts"
 
+# Maps a device UUID to the identifying profile recorded when it was first
+# added, so a later announcement claiming the same UUID can be checked.
+CONF_DEVICE_PROFILES = "device_profiles"
+
+# Repair issue raised when a known UUID reappears with a different profile.
+ISSUE_PROFILE_MISMATCH = "device_profile_mismatch"
+
 
 class HomeAssistantControllerData(TypedDict):
     """Data for creating a HomeAssistantController."""
